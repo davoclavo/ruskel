@@ -31,6 +31,9 @@ pub struct Ruskel {
 
     /// Whether to emit frontmatter comments with rendered output.
     frontmatter: bool,
+
+    /// Target architecture/platform triple for cross-compilation.
+    target_arch: Option<String>,
 }
 
 fn prune_redundant_use_items(results: &mut Vec<ListItem>) {
@@ -85,6 +88,7 @@ impl Ruskel {
             auto_impls: false,
             silent: false,
             frontmatter: true,
+            target_arch: None,
         }
     }
 
@@ -113,6 +117,12 @@ impl Ruskel {
         self
     }
 
+    /// Sets the target architecture/platform triple for cross-compilation.
+    pub fn with_target_arch(mut self, target_arch: Option<String>) -> Self {
+        self.target_arch = target_arch;
+        self
+    }
+
     /// Returns the parsed representation of the crate's API.
     ///
     /// # Arguments
@@ -136,6 +146,7 @@ impl Ruskel {
             features,
             private_items,
             self.silent,
+            self.target_arch.as_deref(),
         )
     }
 
@@ -158,6 +169,7 @@ impl Ruskel {
             features,
             options.include_private,
             self.silent,
+            self.target_arch.as_deref(),
         )?;
 
         let index = SearchIndex::build(&crate_data, options.include_private);
@@ -228,6 +240,7 @@ impl Ruskel {
             features,
             include_private,
             self.silent,
+            self.target_arch.as_deref(),
         )?;
 
         let index = SearchIndex::build(&crate_data, include_private);
@@ -272,8 +285,9 @@ impl Ruskel {
             no_default_features,
             all_features,
             features,
-            true,
+            private_items,
             self.silent,
+            self.target_arch.as_deref(),
         )?;
 
         let mut renderer = Renderer::default()

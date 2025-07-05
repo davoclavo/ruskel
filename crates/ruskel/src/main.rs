@@ -10,7 +10,7 @@ use std::{
 
 use clap::{ColorChoice, Parser};
 use libruskel::{
-    Ruskel, SearchDomain, SearchOptions, highlight, parse_domain_token,
+    Ruskel, SearchDomain, SearchOptions, highlight, nightly_install_error, parse_domain_token,
     toolchain::ensure_nightly_with_docs,
 };
 use shell_words::split;
@@ -95,6 +95,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     verbose: bool,
 
+    /// Target architecture/platform triple (e.g., x86_64-unknown-linux-gnu)
+    #[arg(long)]
+    target_arch: Option<String>,
+
     /// Run as an MCP server on stdout
     #[arg(long, default_value_t = false)]
     mcp: bool,
@@ -109,8 +113,8 @@ struct Cli {
 }
 
 /// Ensure the nightly toolchain and rust-docs JSON component are present.
-fn check_nightly_toolchain() -> Result<(), String> {
-    match ensure_nightly_with_docs() {
+fn check_nightly_toolchain(target_arch: Option<&str>) -> Result<(), String> {
+    match ensure_nightly_with_docs(target_arch) {
         Ok(has_docs) => {
             if !has_docs {
                 eprintln!(
@@ -136,7 +140,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
         || cli.no_page
     {
         return Err(
-            "--mcp can only be used with --auto-impls, --private, --offline, and --verbose".into(),
+            "--mcp can only be used with --auto-impls, --private, --offline, --verbose, and --target-arch".into(),
         );
     }
 
@@ -145,7 +149,8 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
         .with_frontmatter(!cli.no_frontmatter)
-        .with_silent(!cli.verbose);
+        .with_silent(!cli.verbose)
+        .with_target_arch(cli.target_arch.clone());
 
     // Run the MCP server
     let runtime = Runtime::new()?;
@@ -170,7 +175,8 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
         .with_frontmatter(!cli.no_frontmatter)
-        .with_silent(!cli.verbose);
+        .with_silent(!cli.verbose)
+        .with_target_arch(cli.target_arch.clone());
 
     if cli.list {
         return run_list(cli, &rs);
@@ -354,7 +360,7 @@ fn main() {
     let result = if cli.mcp {
         run_mcp(&cli)
     } else {
-        if let Err(e) = check_nightly_toolchain() {
+        if let Err(e) = check_nightly_toolchain(cli.target_arch.as_deref()) {
             eprintln!("{e}");
             process::exit(1);
         }

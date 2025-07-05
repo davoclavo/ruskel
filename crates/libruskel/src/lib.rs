@@ -38,7 +38,7 @@ pub mod toolchain;
 pub use ruskel::Ruskel;
 
 pub use crate::{
-    error::{Result, RuskelError},
+    error::{Result, RuskelError, nightly_install_error},
     render::Renderer,
     search::{
         ListItem, SearchDomain, SearchIndex, SearchItemKind, SearchOptions, SearchPathSegment,

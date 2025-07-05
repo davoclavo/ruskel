@@ -88,3 +88,13 @@ pub fn convert_cargo_error(error: &anyhow::Error) -> RuskelError {
         RuskelError::Cargo(err_msg)
     }
 }
+
+/// Generate a consistent error message for missing nightly toolchain
+pub fn nightly_install_error(context: &str, target_arch: Option<&str>) -> String {
+    let install_cmd = if let Some(target) = target_arch {
+        format!("rustup toolchain install nightly --target {target}")
+    } else {
+        "rustup toolchain install nightly".to_string()
+    };
+    format!("{context} - run '{install_cmd}'")
+}

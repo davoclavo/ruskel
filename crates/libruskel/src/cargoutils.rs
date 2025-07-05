@@ -3,6 +3,7 @@ use std::{
     env, fs,
     io::{self, Write},
     path::{Component, Path, PathBuf, absolute},
+    process::Command,
 };
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
@@ -13,9 +14,14 @@ use tempfile::TempDir;
 
 use super::target::{Entrypoint, Target};
 use crate::{
-    error::{Result, RuskelError, convert_cargo_error},
+    error::{Result, RuskelError, convert_cargo_error, nightly_install_error},
     toolchain::nightly_sysroot,
 };
+
+/// Get the sysroot path for the nightly toolchain
+fn get_sysroot(target_arch: Option<&str>) -> Result<PathBuf> {
+    nightly_sysroot(target_arch)
+}
 
 /// Check if a crate name is a standard library crate
 fn is_std_library_crate(name: &str) -> bool {
@@ -142,8 +148,12 @@ fn resolve_std_reexport(target_str: &str) -> Option<String> {
 }
 
 /// Load pre-built JSON documentation for a standard library crate
-fn load_std_library_json(crate_name: &str, display_name: Option<&str>) -> Result<Crate> {
-    let sysroot = nightly_sysroot()?;
+fn load_std_library_json(
+    crate_name: &str,
+    display_name: Option<&str>,
+    target_arch: Option<&str>,
+) -> Result<Crate> {
+    let sysroot = get_sysroot(target_arch)?;
     let json_path = sysroot
         .join("share")
         .join("doc")
@@ -298,6 +308,7 @@ impl CargoPath {
         features: Vec<String>,
         private_items: bool,
         silent: bool,
+        target_arch: Option<&str>,
     ) -> Result<Crate> {
         // Handle standard library crates specially
         if let Some((actual_crate, display_crate)) = self.std_names() {
@@ -306,7 +317,7 @@ impl CargoPath {
             } else {
                 None
             };
-            return load_std_library_json(actual_crate, display_name);
+            return load_std_library_json(actual_crate, display_name, target_arch);
         }
 
         // First check if this crate has a library target by reading Cargo.toml
@@ -327,7 +338,7 @@ impl CargoPath {
         let mut captured_stdout = Vec::new();
         let mut captured_stderr = Vec::new();
 
-        let build_result = rustdoc_json::Builder::default()
+        let mut builder = rustdoc_json::Builder::default()
             .toolchain("nightly")
             .manifest_path(manifest_path)
             .document_private_items(private_items)
@@ -335,8 +346,14 @@ impl CargoPath {
             .all_features(all_features)
             .features(features)
             .quiet(silent)
-            .silent(false)
-            .build_with_captured_output(&mut captured_stdout, &mut captured_stderr);
+            .silent(false);
+
+        // Add target architecture if specified
+        if let Some(target) = target_arch {
+            builder = builder.target(target.to_string());
+        }
+
+        let build_result = builder.build_with_captured_output(&mut captured_stdout, &mut captured_stderr);
 
         if !silent {
             if !captured_stdout.is_empty() && io::stdout().write_all(&captured_stdout).is_err() {
@@ -600,6 +617,7 @@ impl ResolvedTarget {
         features: Vec<String>,
         private_items: bool,
         silent: bool,
+        target_arch: Option<&str>,
     ) -> Result<Crate> {
         self.package_path.read_crate(
             no_default_features,
@@ -607,6 +625,7 @@ impl ResolvedTarget {
             features,
             private_items,
             silent,
+            target_arch,
         )
     }
 
