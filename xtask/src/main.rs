@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 /// Load the rustdoc JSON metadata for the provided crate name.
 fn load_crate_json(crate_name: &str) -> Result<Crate, Box<dyn Error>> {
-    let sysroot = nightly_sysroot()?;
+    let sysroot = nightly_sysroot(None)?;
     let json_path = sysroot
         .join("share/doc/rust/json")
         .join(format!("{}.json", crate_name));

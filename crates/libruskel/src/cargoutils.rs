@@ -3,7 +3,6 @@ use std::{
     env, fs,
     io::{self, Write},
     path::{Component, Path, PathBuf, absolute},
-    process::Command,
 };
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
@@ -14,7 +13,7 @@ use tempfile::TempDir;
 
 use super::target::{Entrypoint, Target};
 use crate::{
-    error::{Result, RuskelError, convert_cargo_error, nightly_install_error},
+    error::{Result, RuskelError, convert_cargo_error},
     toolchain::nightly_sysroot,
 };
 

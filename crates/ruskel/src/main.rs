@@ -10,7 +10,7 @@ use std::{
 
 use clap::{ColorChoice, Parser};
 use libruskel::{
-    Ruskel, SearchDomain, SearchOptions, highlight, nightly_install_error, parse_domain_token,
+    Ruskel, SearchDomain, SearchOptions, highlight, parse_domain_token,
     toolchain::ensure_nightly_with_docs,
 };
 use shell_words::split;
