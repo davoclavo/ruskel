@@ -27,6 +27,23 @@ fn is_std_library_crate(name: &str) -> bool {
     matches!(name, "std" | "core" | "alloc" | "proc_macro" | "test")
 }
 
+/// Check if a target triple is a no_std target that requires -Zbuild-std
+fn is_no_std_target(target: &str) -> bool {
+    // Common patterns for embedded/no_std targets:
+    // - thumbv* (ARM Cortex-M)
+    // - riscv* (RISC-V)
+    // - *-none-* (bare metal)
+    // - avr-* (AVR microcontrollers)
+    // - msp430-* (MSP430 microcontrollers)
+    // - xtensa-* (Xtensa processors)
+    target.starts_with("thumbv")
+        || target.starts_with("riscv")
+        || target.contains("-none-")
+        || target.starts_with("avr-")
+        || target.starts_with("msp430-")
+        || target.starts_with("xtensa-")
+}
+
 /// Mapping of std library modules to their actual crate location.
 /// This provides a single source of truth for:
 /// 1. Which modules should not be resolved as standalone crates
@@ -321,6 +338,22 @@ impl CargoPath {
 
         // First check if this crate has a library target by reading Cargo.toml
         let manifest_path = self.manifest_path()?;
+
+        // Run `cargo update` to refresh any bundled Cargo.lock with the latest
+        // compatible dependency versions. Registry source directories may bundle a
+        // Cargo.lock that pins older transitive dependency versions, causing
+        // version conflicts during the build.
+        let lock_path = manifest_path.with_file_name("Cargo.lock");
+        if lock_path.exists() {
+            let _ = std::process::Command::new("cargo")
+                .arg("update")
+                .arg("--manifest-path")
+                .arg(&manifest_path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+
         let manifest_content = fs::read_to_string(&manifest_path)?;
         let manifest: cargo_toml::Manifest = cargo_toml::Manifest::from_str(&manifest_content)
             .map_err(|e| RuskelError::ManifestParse(e.to_string()))?;
@@ -332,6 +365,12 @@ impl CargoPath {
             return Err(RuskelError::Generate(
                 "error: no library targets found in package".to_string(),
             ));
+        }
+
+        // Check if we need to enable build-std for this target
+        let needs_build_std = target_arch.is_some_and(|target| is_no_std_target(target));
+        if needs_build_std && !silent {
+            eprintln!("Detected embedded target, enabling -Zbuild-std");
         }
 
         let mut captured_stdout = Vec::new();
@@ -352,7 +391,13 @@ impl CargoPath {
             builder = builder.target(target.to_string());
         }
 
-        let build_result = builder.build_with_captured_output(&mut captured_stdout, &mut captured_stderr);
+        // Enable build-std via environment variable for embedded targets
+        if needs_build_std {
+            builder = builder.env("CARGO_UNSTABLE_BUILD_STD", "core,alloc");
+        }
+
+        let build_result =
+            builder.build_with_captured_output(&mut captured_stdout, &mut captured_stderr);
 
         if !silent {
             if !captured_stdout.is_empty() && io::stdout().write_all(&captured_stdout).is_err() {
