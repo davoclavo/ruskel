@@ -322,7 +322,7 @@ esp-hal = { version = "1.0.0", features = ["esp32c6", "unstable"] }
         false,
     );
 
-    std::env::set_current_dir(original_dir).unwrap();
+    let _ = std::env::set_current_dir(original_dir);
 
     // This test validates that features are properly respected during dependency resolution
     assert!(
@@ -336,5 +336,79 @@ esp-hal = { version = "1.0.0", features = ["esp32c6", "unstable"] }
     assert!(
         output.contains("esp_hal"),
         "Output should contain 'esp_hal'"
+    );
+}
+
+#[test]
+fn test_workspace_feature_unification() {
+    // This test validates that when building a dependency crate from within a
+    // workspace, feature unification from sibling dependencies is respected.
+    //
+    // esp-radio depends on esp-hal with `requires-unstable` but does NOT
+    // forward an `unstable` feature to esp-hal. esp-hal's build script panics
+    // if `unstable` is required but not enabled. When the workspace also
+    // depends on esp-hal with `unstable`, cargo unifies the features and the
+    // build succeeds.
+    //
+    // Without workspace context support, ruskel would build esp-radio in
+    // isolation from the registry source, losing the workspace's feature
+    // unification and causing a build failure.
+
+    let target = "riscv32imac-unknown-none-elf";
+    ensure_target_installed(target).expect("Failed to ensure target is installed");
+
+    let temp_dir = tempdir().expect("Failed to create temp dir");
+    let src_dir = temp_dir.path().join("src");
+    fs::create_dir_all(&src_dir).expect("Failed to create src dir");
+
+    // Create a project that depends on both esp-radio and esp-hal.
+    // esp-hal carries the `unstable` feature that esp-radio's esp-hal dep needs.
+    fs::write(
+        temp_dir.path().join("Cargo.toml"),
+        r#"
+[package]
+name = "test_ws_unification"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+esp-hal   = { version = "1.0.0", features = ["esp32c6", "unstable"] }
+esp-radio = { version = "0.17.0", features = ["esp32c6", "wifi"] }
+"#,
+    )
+    .expect("Failed to write Cargo.toml");
+
+    fs::write(&src_dir.join("lib.rs"), "#![no_std]").expect("Failed to write lib.rs");
+
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp_dir.path()).unwrap();
+
+    let ruskel = Ruskel::new()
+        .with_silent(true)
+        .with_target_arch(Some(target.to_string()));
+
+    // Render esp-radio without passing explicit features — the workspace
+    // context should supply them via feature unification.
+    let result = ruskel.render(
+        "esp-radio",
+        false,
+        false,
+        vec!["esp32c6".to_string(), "wifi".to_string()],
+        false,
+    );
+
+    let _ = std::env::set_current_dir(original_dir);
+
+    assert!(
+        result.is_ok(),
+        "Should successfully render esp-radio via workspace feature unification: {:?}",
+        result.err()
+    );
+
+    let output = result.unwrap();
+    assert!(!output.is_empty(), "Output should not be empty");
+    assert!(
+        output.contains("esp_radio"),
+        "Output should contain 'esp_radio'"
     );
 }

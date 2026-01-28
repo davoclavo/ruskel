@@ -419,6 +419,70 @@ impl CargoPath {
         Ok(crate_data)
     }
 
+    /// Build rustdoc JSON for this package from within a parent workspace.
+    ///
+    /// Uses `cargo rustdoc --manifest-path <workspace> -p <package>` so that
+    /// the workspace's `Cargo.lock` and feature unification are respected.
+    /// Feature flags are not passed explicitly because `cargo rustdoc -p` does
+    /// not allow `--features` for packages outside the workspace members.
+    pub fn read_crate_in_workspace(
+        &self,
+        workspace_manifest: &Path,
+        package_name: &str,
+        private_items: bool,
+        silent: bool,
+        target_arch: Option<&str>,
+    ) -> Result<Crate> {
+        // Check if we need to enable build-std for this target
+        let needs_build_std = target_arch.is_some_and(|target| is_no_std_target(target));
+        if needs_build_std && !silent {
+            eprintln!("Detected embedded target, enabling -Zbuild-std");
+        }
+
+        let mut captured_stdout = Vec::new();
+        let mut captured_stderr = Vec::new();
+
+        let mut builder = rustdoc_json::Builder::default()
+            .toolchain("nightly")
+            .manifest_path(workspace_manifest)
+            .package(package_name)
+            .document_private_items(private_items)
+            .quiet(silent)
+            .silent(false);
+
+        // Add target architecture if specified
+        if let Some(target) = target_arch {
+            builder = builder.target(target.to_string());
+        }
+
+        // Enable build-std via environment variable for embedded targets
+        if needs_build_std {
+            builder = builder.env("CARGO_UNSTABLE_BUILD_STD", "core,alloc");
+        }
+
+        let build_result =
+            builder.build_with_captured_output(&mut captured_stdout, &mut captured_stderr);
+
+        if !silent {
+            if !captured_stdout.is_empty() && io::stdout().write_all(&captured_stdout).is_err() {
+                // Best-effort output mirroring; ignore write failures.
+            }
+            if !captured_stderr.is_empty() && io::stderr().write_all(&captured_stderr).is_err() {
+                // Best-effort output mirroring; ignore write failures.
+            }
+        }
+
+        let json_path =
+            build_result.map_err(|err| map_rustdoc_build_error(&err, &captured_stderr, silent))?;
+        let json_content = fs::read_to_string(&json_path)?;
+        let crate_data: Crate = serde_json::from_str(&json_content).map_err(|e| {
+            RuskelError::Generate(format!(
+                "Failed to parse rustdoc JSON, which may indicate an outdated nightly toolchain - try running 'rustup update nightly':\nError: {e}"
+            ))
+        })?;
+        Ok(crate_data)
+    }
+
     /// Compute the absolute `Cargo.toml` path for this source.
     pub fn manifest_path(&self) -> Result<PathBuf> {
         if self.is_std_library() {
@@ -634,6 +698,21 @@ pub struct ResolvedTarget {
     /// "module::submodule::item". Empty string for package root. This might not necessarily match
     /// the user's input.
     pub filter: String,
+
+    /// When this target was resolved as a dependency of a workspace, this holds
+    /// the workspace manifest path and the package name. Used to run
+    /// `cargo rustdoc --manifest-path <workspace> -p <name>` so that the
+    /// workspace's `Cargo.lock` and feature unification are respected.
+    workspace_context: Option<WorkspaceContext>,
+}
+
+/// Context for building a dependency within its parent workspace.
+#[derive(Debug)]
+struct WorkspaceContext {
+    /// Absolute path to the workspace's `Cargo.toml`.
+    manifest_path: PathBuf,
+    /// Package name as it appears in the dependency graph (e.g., "esp-radio").
+    package_name: String,
 }
 
 impl ResolvedTarget {
@@ -650,10 +729,28 @@ impl ResolvedTarget {
         Self {
             package_path: path,
             filter,
+            workspace_context: None,
         }
     }
 
+    /// Attach workspace context so that `read_crate` can build from the
+    /// workspace rather than in isolation from the registry source.
+    fn with_workspace_context(mut self, manifest_path: PathBuf, package_name: String) -> Self {
+        self.workspace_context = Some(WorkspaceContext {
+            manifest_path,
+            package_name,
+        });
+        self
+    }
+
     /// Read the crate data for this resolved target using rustdoc JSON generation.
+    ///
+    /// When workspace context is available (the dependency was found via a
+    /// workspace), first attempts to build from the workspace manifest with
+    /// `--package` so that `Cargo.lock` and feature unification are respected.
+    /// If that fails (e.g. the package is not a direct workspace dependency),
+    /// falls back to building from the package's own manifest with explicit
+    /// feature flags.
     pub fn read_crate(
         &self,
         no_default_features: bool,
@@ -663,6 +760,21 @@ impl ResolvedTarget {
         silent: bool,
         target_arch: Option<&str>,
     ) -> Result<Crate> {
+        if let Some(ctx) = &self.workspace_context {
+            match self.package_path.read_crate_in_workspace(
+                &ctx.manifest_path,
+                &ctx.package_name,
+                private_items,
+                silent,
+                target_arch,
+            ) {
+                Ok(crate_data) => return Ok(crate_data),
+                Err(_) => {
+                    // Workspace build failed (e.g. package not directly in
+                    // workspace). Fall through to the standalone build.
+                }
+            }
+        }
         self.package_path.read_crate(
             no_default_features,
             all_features,
@@ -731,7 +843,9 @@ impl ResolvedTarget {
                         }
 
                         if let Some(dependency) = root.find_dependency(&name, offline)? {
-                            Ok(Self::new(dependency, &target.path))
+                            let ws_manifest = root.manifest_path()?;
+                            Ok(Self::new(dependency, &target.path)
+                                .with_workspace_context(ws_manifest, name))
                         } else {
                             Self::from_dummy_crate(&name, version, &target.path, offline)
                         }
@@ -880,7 +994,14 @@ pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget>
                         .package_path
                         .find_dependency(first_component, offline)?
                 {
-                    return Ok(ResolvedTarget::new(cp, &target.path));
+                    let mut rt = ResolvedTarget::new(cp, &target.path);
+                    if let Ok(ws_manifest) = resolved.package_path.manifest_path() {
+                        rt = rt.with_workspace_context(
+                            ws_manifest,
+                            first_component.to_string(),
+                        );
+                    }
+                    return Ok(rt);
                 }
 
                 Ok(resolved)
@@ -1360,6 +1481,7 @@ version = "0.1.0"
         let ResolvedTarget {
             package_path,
             filter,
+            ..
         } = resolved;
         let path = package_path.canonical_path()?;
         let expected = fs::canonicalize(&localcrate_dir)?;
