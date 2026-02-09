@@ -412,3 +412,31 @@ esp-radio = { version = "0.17.0", features = ["esp32c6", "wifi"] }
         "Output should contain 'esp_radio'"
     );
 }
+
+#[test]
+fn test_crate_with_underscores_in_name() {
+    // Test that crates with underscores in their package name on crates.io work.
+    // The ra_ap_* crates (rust-analyzer packages) use underscores in their actual
+    // package names, not hyphens. This tests that we don't incorrectly convert
+    // underscores to hyphens when resolving dependencies.
+    let ruskel = Ruskel::new().with_silent(true);
+
+    let result = ruskel.render("ra_ap_ide", false, false, Vec::new(), false);
+
+    assert!(
+        result.is_ok(),
+        "Should successfully render ra_ap_ide (underscore package name): {:?}",
+        result.err()
+    );
+
+    let output = result.unwrap();
+    assert!(!output.is_empty(), "Output should not be empty");
+    assert!(
+        output.contains("ra_ap_ide"),
+        "Output should contain 'ra_ap_ide'"
+    );
+    assert!(
+        output.contains("pub"),
+        "Output should contain at least one 'pub' declaration"
+    );
+}

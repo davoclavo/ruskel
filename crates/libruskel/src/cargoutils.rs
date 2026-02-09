@@ -642,9 +642,8 @@ fn generate_dummy_manifest(
     version: Option<String>,
     features: Option<&[&str]>,
 ) -> String {
-    // Convert underscores to hyphens for Cargo package names
-    let cargo_dependency = dependency.replace('_', "-");
-
+    // Use the dependency name as-is - Cargo accepts both hyphenated and underscored names.
+    // Some crates like ra_ap_ide use underscores in their actual package name on crates.io.
     let version_str = version.map_or("*".to_string(), |v| v);
     let features_str = features.map_or(String::new(), |f| {
         let feature_list = f
@@ -660,7 +659,7 @@ name = "dummy-crate"
 version = "0.1.0"
 
 [dependencies]
-{cargo_dependency} = {{ version = "{version_str}"{features_str} }}
+{dependency} = {{ version = "{version_str}"{features_str} }}
 "#
     )
 }
@@ -996,10 +995,7 @@ pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget>
                 {
                     let mut rt = ResolvedTarget::new(cp, &target.path);
                     if let Ok(ws_manifest) = resolved.package_path.manifest_path() {
-                        rt = rt.with_workspace_context(
-                            ws_manifest,
-                            first_component.to_string(),
-                        );
+                        rt = rt.with_workspace_context(ws_manifest, first_component.to_string());
                     }
                     return Ok(rt);
                 }
@@ -1308,20 +1304,19 @@ error: Compilation failed, aborting rustdoc
     }
 
     #[test]
-    fn test_generate_dummy_manifest_with_underscores() {
-        // Test underscore to hyphen conversion
+    fn test_generate_dummy_manifest_preserves_name() {
+        // Names should be preserved as-is - Cargo handles both underscores and hyphens.
+        // Some crates like ra_ap_ide use underscores in their actual package name.
         let manifest = generate_dummy_manifest("serde_json", None, None);
-        assert!(manifest.contains("serde-json = { version = \"*\" }"));
-        assert!(!manifest.contains("serde_json"));
+        assert!(manifest.contains("serde_json = { version = \"*\" }"));
 
-        // Test with already hyphenated names (should remain unchanged)
+        // Hyphenated names should also be preserved
         let manifest = generate_dummy_manifest("async-trait", None, None);
         assert!(manifest.contains("async-trait = { version = \"*\" }"));
 
-        // Test complex name with multiple underscores
-        let manifest =
-            generate_dummy_manifest("my_complex_crate_name", Some("0.1.0".to_string()), None);
-        assert!(manifest.contains("my-complex-crate-name = { version = \"0.1.0\" }"));
+        // Underscored names like ra_ap_ide should be preserved
+        let manifest = generate_dummy_manifest("ra_ap_ide", Some("0.0.318".to_string()), None);
+        assert!(manifest.contains("ra_ap_ide = { version = \"0.0.318\" }"));
     }
 
     #[test]
